@@ -1,9 +1,9 @@
-library(rpart)
-library(rpart.plot)
-library(randomForest)
-library(caret)
-library(e1071)
-library(doSNOW)
+library(rpart) # CART
+library(rpart.plot) # CART plot
+library(randomForest) 
+library(caret) # Cross Validation
+library(e1071) # Misc Statistical functions
+library(doSNOW) # Multi-cores processing
 
 # Decision Tree using package::party's CTREE
 dec_tree <- function(df) {
@@ -51,6 +51,7 @@ table(df_test$alcbin, PredictCV)
 
 
 # RANDOM FOREST
+# WARNING!!! - COMPUTATIONALLY INTENSIVE
 rf.train.1 <- df_train[,c("gender","age","race","inc","health","maristat","insured","educat","k6")]
 rf.label <- as.factor(df_train$alcbin)
 
