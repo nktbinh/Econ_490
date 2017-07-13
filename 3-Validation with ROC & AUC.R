@@ -1,8 +1,8 @@
-library(caTools)
-library(ggplot2)
-library(party)
-library(pROC)
-library(gridExtra)
+library(caTools) # Randomized sample split
+library(ggplot2) # Visualisation tool
+library(party) # Ctree
+library(pROC) # ROC Tool
+library(gridExtra) # Misc Functions for "Grid" Graphics
 
 # Function to perform Leave-p-out cross validation
 log_reg <- function(df, size=100) {
