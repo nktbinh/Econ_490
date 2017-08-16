@@ -1,44 +1,18 @@
-library(caTools) # Randomized sample split
 library(ggplot2) # Visualisation tool
-library(party) # Ctree
 library(pROC) # ROC Tool
 library(gridExtra) # Misc Functions for "Grid" Graphics
+source("common.R")
 
-# Function to perform Leave-p-out cross validation
-log_reg <- function(df, size=100) {
-  N <- nrow(df)
-  size=100
-  
-  df <- df[sample(N),]
-  
-  num <- floor(N/size)
-  rest <- N - num * size
-  ncv <- cumsum(c(rep(size,num), rest))
-  
-  predictions <- data.frame(alcbin = df$alcbin, pred = NA)
-  
-  for(n in ncv) {
-    v <- rep(TRUE, N)
-    v[(n-size+1):n] <- FALSE
-    
-    lr <- glm(alcbin ~ age+race+educat+health+maristat+insured+race+gender+k6, data = df[v,], family = binomial(logit))
-    predictions[!v,"pred"] <- predict(lr, newdata=df[!v,], type="response")
-  }
-  
-  return(predictions)
-}
+loocv_pred <- log_reg(df_train,size=100)
+summary(loocv_pred)
+with(loocv_pred, table(alcbin,pred>0.3))
 
-predictions <- log_reg(df_train,size=100)
-summary(predictions)
-with(predictions, table(alcbin,pred>=0.5))
-(10092+3157)/nrow(predictions)
-
-ROCRpred100pCV = prediction(predictions$pred,predictions$alcbin) #ROCR prediction function
-ROCRperf100pCV = performance(ROCRpred100pCV, "tpr", "fpr") # Performance Function
+ROCRpred100pCV = prediction(loocv_pred$pred,loocv_pred$alcbin) 
+ROCRperf100pCV = performance(ROCRpred100pCV, "tpr", "fpr") 
 auc = as.numeric(performance(ROCRpred100pCV, "auc")@y.values)
-auc
+
 # OR: AUC for the above parameter
-auc(predictions$alcbin, predictions$pred)
+auc(loocv_pred$alcbin, loocv_pred$pred)
 
 # Function to plot the distribution of Binge/Heavy and Not cases on 
 # the predicted survival probability
@@ -50,7 +24,7 @@ plot_pred_type_distribution <- function(df, threshold) {
   v <- ifelse(df$pred < threshold & df$alcbin == 0, "TN", v)
   
   df$pred_type <- v
-  
+
   ggplot(data=df, aes(x=alcbin, y=pred)) + 
     geom_violin(fill=rgb(1,1,1,alpha=0.6), color=NA) + 
     geom_jitter(aes(color=pred_type), alpha=0.6) +
@@ -59,7 +33,8 @@ plot_pred_type_distribution <- function(df, threshold) {
     labs(title=sprintf("Threshold at %.2f", threshold))
 }
 
-plot_pred_type_distribution(predictions,0.6)
+plot_pred_type_distribution(loocv_pred,0.5)
+
 
 # Calculate ROC for the above distribution
 calculate_roc <- function(df, cost_of_fp, cost_of_fn, n=100) {
@@ -84,7 +59,7 @@ calculate_roc <- function(df, cost_of_fp, cost_of_fn, n=100) {
   return(roc)
 }
 
-roc <- calculate_roc(predictions,1,2,n=100)
+roc <- calculate_roc(loocv_pred,1,2,n=100)
 
 # Plot ROC curve for the above distribution
 plot_roc <- function(roc, threshold, cost_of_fp, cost_of_fn) {
@@ -115,6 +90,6 @@ plot_roc <- function(roc, threshold, cost_of_fp, cost_of_fn) {
   grid.arrange(p_roc, p_cost, ncol=2, sub=textGrob(sub_title, gp=gpar(cex=1), just="bottom"))
 }
 
-plot_roc(roc, 0.7, 1, 2)
+plot_roc(roc, 0.3, 1, 2)
 
 
