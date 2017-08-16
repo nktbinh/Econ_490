@@ -16,6 +16,7 @@ test = subset(alchol, split == FALSE)
 # Process data frame with utility function
 df_train<-prepare_dataset(train)
 df_test<-prepare_dataset(test)
+df_full<-rbind(df_test,df_train)
 
 # Logistic Regression
 glm_alcbin = glm(alcbin ~ age+race+inc+health+educat+maristat+gender+insured+k6, 
