@@ -419,7 +419,7 @@ model_rf2<-randomForest(alcbin ~ age+race+educat+maristat+gender+k6,
 preds2<-predict(model_rf2,df_test[,-10])
 ```
 
-The rebuilt forest achives an AUC of`r auc(preds2,df_test$alcbin)`
+The rebuilt forest achives an AUC of`r Metrics::auc(preds2,df_test$alcbin)`
 
 ## Boruta Algorithm
 
