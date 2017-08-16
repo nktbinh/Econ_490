@@ -1,0 +1,472 @@
+---
+title: "Predicting Problem Drinking using Socio-Economic Factors"
+author: "Binh Nguyen"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::readthedown:
+    highlight: kate
+---
+
+
+```{r knitr_init, echo=FALSE, cache=FALSE}
+library(knitr)
+library(rmdformats)
+
+## Global options
+options(max.print="75")
+opts_chunk$set(cache=TRUE,
+               prompt=FALSE,
+               tidy=TRUE,
+               comment=NA,
+               message=FALSE,
+               warning=FALSE)
+opts_knit$set(width=75)
+```
+
+# Introduction
+
+## The Data
+
+NSDUH is a population based survey developed to gather information about substance abuse prevalence and determinants by drawing a nationally representative sample of individuals 12 years and older. Details of the study in 2014 can be found [here](https://www.samhsa.gov/data/sites/default/files/NSDUH-FRR1-2014/NSDUH-FRR1-2014.pdf) or [here](https://www.samhsa.gov/data/sites/default/files/NSDUH-DetTabs2014/NSDUH-DetTabs2014.pdf). Raw data of this study can be found [here](http://www.icpsr.umich.edu/icpsrweb/DSDR/studies/36361#datasetsSection). The original file contains 3148 variables and 55271 observations. 
+
+## Alcohol Use
+
+The observed outcome for this analysis **alcbin** (originally *BINGEHVY*) is a composite variable created by examination of past month Binge Alcohol Use (*BINGEDRK*), past month Heavy Alcohol Use (*HVYDRK2*) and past month alcohol use (*ALCMON*). Binge Alcohol Use is defined as drinking five or more drinks on the same occasion (i.e., at the same time or within a couple of hours of each other) on at least 1 day in the past 30 days. Heavy Alcohol Use is defined as drinking five or more drinks on the same occasion on each of 5 or more days in the past 30 days; all heavy alcohol users are also binge alcohol users. IN NSDUH, a "drink" is defined as a can or bottle of beer, a glass of wine or a wine cooler, a shot of liquor, or a mixed drink with liquor in it. Times when respondents only had a sip or two from a drink are not considered to be alcohol consumption. 
+
+In 2014, 139.7 million Americans aged 12 or older reported current use of alcohol, 60.9 million reported binge alcohol use in the past month, and 16.3 million reported heavy alcohol use in the past month. Thus slightly more than 2 in 5 current alcohol users reported binge alcohol use (43.6 percent), and about 1 in 9 current alcohol users reported heavy alcohol use (11.7 percent). Among binge heavy alcohol users, more than 1 in 4 (26.8 percent) were heavy users.
+
+## Measurement Items
+
+Covariates assessed in this report were age, race, income, self-reported health, education attainment, marital status, gender, insurance coverage and an indicator of psychological distress. Almost all variables were dichotomized for analysis to avoid quasi-separation of data within the model due to low cell frequency as well as ease of interpretation. 
+
+The indicator of psychological distress **k6**, being the only quantitative predictor, is a composite measure based on the Kessler-6 psychological distress scale. Respondents to the NSDUH survey were asked to rank their experience with feelings of sadness, restlessness and hopelessness as some of the time or all of the time. These score were used to develop a major psychological distress scale of 0-24. In the survey, participants were asked to score the last 30 days (*K6SCMON*) as well as the worst 30 days in the last year (*K6SCMAX*). The highest score between these 2 months was used in the analysis. 
+
+## Loading Necessary Packages
+
+```{r packages}
+# Load Required Packages
+library(stringr) # Deal with string
+library(tidyverse) # General Purpose Data Cleaning
+library(forcats) # Deal with factors
+library(caTools) # Stratified sample split
+source("common.R")
+```
+
+## Importing Data
+
+The original file contains 3148 variables and 55271 observations. I did the data cleaning manually and wrote the output into a csv file (details of this process can be found in my repository on Github). The resulting data frame now consists of 31 variables and 41405 observations. We now will go ahead and perform strafied split of the data into training and testing set using *caTools* package.
+
+```{r import_data}
+alchol <- data.frame(read_csv("alcohol2.csv"), check.names = FALSE)
+
+# Split into training and testing sets
+set.seed(1234)
+split = sample.split(alchol$alcbin, SplitRatio = 0.7)
+train = subset(alchol, split == TRUE)
+test = subset(alchol, split == FALSE)
+```
+
+We still need to clean up a few things. Firstly, we reduce the dimension in both our train and test sets. It is entirely possible to involve a larger number of predictors into our models but one has to be aware of overfitting or multicollinearity between covariates. Next we dichotomize outcome variable **alcbin** into responses "Yes" if participants answered Yes to Binge or Heavy Drinking and "No" otherwise as we are interested in binary classification. At this point, we ended up with *df_train* as our training set, *df_test* as our testing set and *df_full* - the row-binded combination of these 2.
+
+```{r }
+# Process data frame with utility function
+df_train<-prepare_dataset(train)
+df_test<-prepare_dataset(test)
+df_full<-rbind(df_test,df_train)
+```
+
+## Summary Statistic
+
+Time to look at the data.
+
+```{r summary}
+str(df_full)
+summary(df_full)
+```
+
+We have 10 variables as mentioned in previous section: 1 outcome varible (**alcbin**) and 9 covariates.
+
+# Classification
+
+There are many possible classification techniques that one might use to predict a qualitative response. In this section we will discuss three widely used classifiers: *logistic regression, linear discriminant analysis and quadratic discriminant analysis*
+
+## Multinomial Logistic Regression
+
+Logistic regression utilizes *maximum likelihood* to fit its model. The estimates coefficients of the independent variables are chosen to maximize the likelihood function. 
+
+```{r Logit1}
+glm_alcbin = glm(alcbin ~ age+race+inc+health+educat+maristat+gender+insured+k6, 
+                 data=df_train, family="binomial")
+summary(glm_alcbin)
+```
+
+Based on the p-values, there are strong evidences of an association between **alcbin** and *age, race, health, education attainment, marital status, gender* and *k6 score* while the opposite applies to *income* and *insurance coverage*.
+
+We will now go on to calculate the area under the graph (AUC) of the Receiver Operating Curve (ROC) for the glm model based on the training data.
+
+```{r Logit2}
+library(ROCR) # ROC plots and parameters
+
+glm_predTrain = predict(glm_alcbin, type="response")
+glm_ROCRpredTrain = prediction(glm_predTrain, df_train$alcbin) 
+glm_ROCRperfTrain = performance(glm_ROCRpredTrain, "tpr", "fpr") 
+glm_aucTrain = as.numeric(performance(glm_ROCRpredTrain, "auc")@y.values)
+```
+
+The model scores an AUC of `r glm_aucTrain` . We'll now time to apply the model onto the test set and see how accurate its predictions are. 
+
+```{r Logit3}
+glm_predTest=predict(glm_alcbin,df_test,type="response")
+with(df_test,table(alcbin,glm_predTest >0.5))
+```
+
+We obtain an accuracy of 0.708 from the above confusion matrix. How about the AUC value of the ROC for the model applied on the test set?
+
+```{r Logit4}
+glm_ROCRpredTest = prediction(glm_predTest, df_test$alcbin) 
+glm_ROCRperfTest = performance(glm_ROCRpredTest, "tpr", "fpr") 
+glm_auc = as.numeric(performance(glm_ROCRpredTest, "auc")@y.values)
+```
+
+So GLM model achieves an AUC value of `r glm_auc`. Below is a visualization of the ROC curve.
+
+```{r Logit 5}
+plot(glm_ROCRperfTest, colorize=TRUE, print.cutoffs.at=seq(0,1,by=0.1), 
+     text.adj=c(-0.2,1.7)) 
+```
+
+## Linear Discriminant Analysis
+
+While Logistic Regression involves directly modelling Pr(Y=k|X=x) using the logistic function, Linear Discriminant Analysis (LDA) models the distribution of the predictos X separately in each of the response classes (given Y), and then use Bayes' theorem to flip these around into estimates for Pr(Y=k|X=x). LDA has several advantages over logistic regression:
+
+- When the class are well-separated, the parameter estimates for the logistic regression model are surprisingly unstable. Linear discriminant analysis does not suffer from this problem.
+
+- If n is small and the distribution of the predictors X is approximately normal in each of the class, the LDA model is again more stable than the logistic regression model. 
+
+- LDA is also more popular when we have more than two response classes (i.e. if we retained the original 4 values of the outcome variable **alcbin**)
+
+We now will go ahead and implement LDA onto our training set. 
+
+```{r LDA1}
+library(MASS)
+library(class)
+
+# Linear Discriminant Analysis
+lda_alcbin=lda(alcbin ~ age+race+inc+educat+health+maristat+insured+gender+k6, data=df_train)
+lda_alcbin
+```
+
+The *predict()* function then returns a list with 3 elements of which *class* provides LDA's predictions about **alcbin**. 
+
+```{r LDA2}
+lda_predTest=predict(lda_alcbin, df_test)
+lda_class=lda_predTest$class
+table(lda_class,df_test$alcbin)
+```
+
+This gives us an accuracy rate of `r mean(lda_class==df_test$alcbin)`, slightly lower than what glm gave us. Similarly, we arrive at the AUC value.
+
+```{r LDA3}
+lda_ROCRpredTest = prediction(lda_predTest$posterior[,2], df_test$alcbin) 
+lda_ROCRperfTest = performance(lda_ROCRpredTest, "tpr", "fpr") 
+lda_auc = as.numeric(performance(lda_ROCRpredTest, "auc")@y.values)
+```
+
+LDA achieves an AUC value of `r lda_auc` which is a little higher than that of glm model. 
+
+## Quadratic Discriminant Analysis
+
+Quadratic Discriminant Analysis (QDA) is an extension of LDA in which the QDA classifiers results from assuming that the observations from each class are drawn from a Gaussian distribution, and plugging estimates for the parameters into Bayes' theorem in order to perform prediction. However, unlike LDA, QDA assumes each class has its own covariance matrix. Due to this LDA is a much less flexible classifier than QDA and so has substantially lower variance. On the other hand, QDA can benefit from lower bias, especially if the training set if very large. 
+
+```{r QDA}
+# Quadratic Discriminant Analysis
+qda_alcbin=qda(alcbin ~ age+race+educat+health+maristat+insured+gender+k6, data=df_train)
+qda_alcbin
+qda_predTest = predict(qda_alcbin,df_test)
+qda_class=predict(qda_alcbin,df_test)$class
+table(qda_class,df_test$alcbin)
+
+qda_ROCRpredTest = prediction(qda_predTest$posterior[,2], df_test$alcbin) 
+qda_ROCRperfTest = performance(qda_ROCRpredTest, "tpr", "fpr") 
+qda_auc = as.numeric(performance(qda_ROCRpredTest, "auc")@y.values)
+```
+
+QDA achieves an accuracy rate of `r mean(qda_class==df_test$alcbin)`, similar to that of LDA's and AUC of `r qda_auc`, the highest out of our 3 binary classification models so far.
+
+## More on Logistic Regression
+
+You can determine the significance of a logistic regression model by looking at the difference between the model's deviance on the training data, and the null deviance (the deviance of the best constant model: the mean of y). In R tongue, if your glm model is called *model* then you want to look at *delta_deviance = model\$null.deviance - model\$deviance*. If there is no signal, then this quantity is distributed as a chi-square distribution with degrees of freedom equal to the difference of the degrees of freedom of each model (*delta_deviance* will have one degree of freedom for every numerical input to the model, and *k-1* degrees of freedom for every k-level categorical variable). The area under the right tail of this chi-squared distribution is the probability that no-signal data would produce *delta_deviance* as large as what you observed. This is the significance value of model. We create some utility functions to extract these values:
+
+```{r chisq1}
+get_significance = function(model) {
+  delta_deviance = model$null.deviance - model$deviance
+  df = model$df.null - model$df.residual
+  sig = pchisq(delta_deviance, df, lower.tail=FALSE)
+}
+
+get_chiscores = function(dframe, varnames) {
+  nvar = length(varnames)
+  scores = numeric(nvar)
+  for(i in seq_len(nvar)) {
+    model = glm(paste("alcbin~",varnames[i]), dframe,
+                family=binomial(link="logit"))
+    scores[i] = get_significance(model)
+  }
+  
+  sframe = data.frame(var=varnames,
+                      scores=scores, stringsAsFactors=FALSE)
+  sframe
+}
+
+varnames = setdiff(colnames(df_train), "alcbin")
+sframe = get_chiscores(df_train, varnames)
+```
+
+From this we can heuristically determine which variables have signal for a classification model by looking for variables with small significance value (as estimated by the chi-square distribution). The way we define "small" is by picking a threshold, and accepting variables whose significance value is smaller than that threshold. Most modeling algorithms can handle the presence of a few noise variables, so it's better to pick a somewhat high threshold to err on the side of accepting useless variables, rather than losing useful ones. The graph below show variable scores(significance). The threshold is shown as the dashed red line; the variables that fell below the threshold are shown in green.
+
+
+```{r chisq3}
+scoreplot = function(frm, threshold, sort=1) {
+  n = dim(frm)[1]
+  frm$var = reorder(frm$var, frm$scores*sort, FUN=sum)
+  frm$goodvar = frm$scores < threshold
+  
+  ggplot(frm, aes(x=var, y=scores, ymin=0, ymax=scores, color=goodvar)) +
+    geom_pointrange() +
+    geom_hline(yintercept=threshold, color="red", linetype=2) +
+    scale_color_manual(values=c("TRUE"="darkgreen", "FALSE"="darkgray")) +
+    theme(legend.position="none")
+}
+
+threshold = 0.05
+scoreplot(sframe, threshold)
+```
+
+# Resampling Method
+
+Resampling Method involves repeatedly drawing samples from a training set and refitting a model of interest on each sample in order to obtain additional information about the fitted model. For example, in order to estimate the variability of a linear regression fit, we can repeatedly draw different samples from the training data, fit a linear regression to each new sample, and then examine the extent to which the resulting fits differ. Such an approach may allow us to obtain information that would not be available from fitting the model only once during the original training sample. In this section, we will discuss a very commonly used resampling cross-validation, more specifically Leave-p-Out Cross-Validation (LpO CV).
+
+## Leave-p-Out Cross Validation
+
+LpO CV involves using p observations as the validation set and the remaining observations as the training set. The statistical learning method is fit on these n-p training observations and a prediction p is made for the excluded p observations. The process is then repeated for the next p observations until a complete iteration has been run throughout our data set. Below is a utility function to perform leave 100 out Cross Validation on our training set. 
+
+```{r CV}
+log_reg <- function(df, size=100) {
+  N <- nrow(df)
+  size=100
+  
+  df <- df[sample(N),]
+  
+  num <- floor(N/size)
+  rest <- N - num * size
+  ncv <- cumsum(c(rep(size,num), rest))
+  
+  predictions <- data.frame(alcbin = df$alcbin, pred = NA)
+  
+  for(n in ncv) {
+    v <- rep(TRUE, N)
+    v[(n-size+1):n] <- FALSE
+    
+    lr <- glm(alcbin ~ age+race+inc+educat+health+maristat+insured+gender+k6, 
+              data = df[v,], 
+              family = binomial(logit))
+    predictions[!v,"pred"] <- predict(lr, newdata=df[!v,], type="response")
+  }
+  return(predictions)
+}
+```
+
+We proceed to apply this function and obtain the usual model diagnostic metrics.
+
+```{r CV2}
+loocv_pred <- log_reg(df_train,size=100)
+summary(loocv_pred)
+with(loocv_pred, table(alcbin,pred>0.5))
+
+ROCRpred100pCV = prediction(loocv_pred$pred,loocv_pred$alcbin) 
+ROCRperf100pCV = performance(ROCRpred100pCV, "tpr", "fpr") 
+L100pCV_auc = as.numeric(performance(ROCRpred100pCV, "auc")@y.values)
+```
+
+Note that after Cross Validation is applied on our glm model of the training set, the accuracy remains at 0.706 but the AUC value of `r L100pCV_auc` is a bit of a dip from `r glm_aucTrain` Based on this evaluation, we can be more confident at how well this classifier will do when asked to make prediction on the testing set (which in fact it did quite well).
+
+## More on ROC, AUC and Threshold Value
+
+Not all diagnostic tests or classifiers return a simple "yes-or-no" answer. In fact, most probably don't. Generally, a classification or diagnostic procedure will return a score along a continuum; ideally, the positive instances score towards one end of the scale, and the negative examples towards the other end. It is up to the analyst to set a threshold on that score that separates what is considered a positive result from what is considered a negative result. The receiver Operating Characteristic Curve, or *ROC Curve*, is a tool that helps set the best threshold. 
+
+Let's have a look at the distribution of response values of the outcome variable **alcbin** on the predicted probabilities.
+
+```{r ROC_AUC1}
+# Visualize Prediction
+plot_pred_type_distribution <- function(df, threshold) {
+  v <- rep(NA, nrow(df))
+  v <- ifelse(df$pred >= threshold & df$alcbin == 1, "TP", v)
+  v <- ifelse(df$pred >= threshold & df$alcbin == 0, "FP", v)
+  v <- ifelse(df$pred < threshold & df$alcbin == 1, "FN", v)
+  v <- ifelse(df$pred < threshold & df$alcbin == 0, "TN", v)
+  
+  df$pred_type <- v
+
+  ggplot(data=df, aes(x=alcbin, y=pred)) + 
+    geom_violin(fill=rgb(1,1,1,alpha=0.6), color=NA) + 
+    geom_jitter(aes(color=pred_type), alpha=0.6) +
+    geom_hline(yintercept=threshold, color="red", alpha=0.6) +
+    scale_color_discrete(name = "type") +
+    labs(title=sprintf("Threshold at %.2f", threshold))
+}
+
+plot_pred_type_distribution(loocv_pred,0.5)
+```
+
+This plot illustrates the tradeoff we face upon choosing a reasonable threshold. If we increase the threshold, the number of false positive (FP) is lowered while the number of false negative (FN) results increase. 
+
+The ROC curve was introduced for the purpose of visualizing and quantifying the impact of a threshold on the FP/FN tradeoff. 
+
+```{r ROC_AUC2}
+library(gridExtra)
+library(grid)
+
+calculate_roc <- function(df, cost_of_fp, cost_of_fn, n=100) {
+  tpr <- function(df, threshold) {
+    sum(df$pred >= threshold & df$alcbin == 1) / sum(df$alcbin == 1)
+  }
+  
+  fpr <- function(df, threshold) {
+    sum(df$pred >= threshold & df$alcbin == 0) / sum(df$alcbin == 0)
+  }
+  
+  cost <- function(df, threshold, cost_of_fp, cost_of_fn) {
+    sum(df$pred >= threshold & df$alcbin == 0) * cost_of_fp + 
+      sum(df$pred < threshold & df$alcbin == 1) * cost_of_fn
+  }
+  
+  roc <- data.frame(threshold = seq(0,1,length.out=n), tpr=NA, fpr=NA)
+  roc$tpr <- sapply(roc$threshold, function(th) tpr(df, th))
+  roc$fpr <- sapply(roc$threshold, function(th) fpr(df, th))
+  roc$cost <- sapply(roc$threshold, function(th) cost(df, th, cost_of_fp, cost_of_fn))
+  
+  return(roc)
+}
+
+roc <- calculate_roc(loocv_pred,1,2,n=100)
+
+# Plot ROC curve for the above distribution
+plot_roc <- function(roc, threshold, cost_of_fp, cost_of_fn) {
+  
+  norm_vec <- function(v) (v - min(v))/diff(range(v))
+  
+  idx_threshold = which.min(abs(roc$threshold-threshold))
+  
+  col_ramp <- colorRampPalette(c("green","orange","red","black"))(100)
+  col_by_cost <- col_ramp[ceiling(norm_vec(roc$cost)*99)+1]
+  p_roc <- ggplot(roc, aes(fpr,tpr)) + 
+    geom_line(color=rgb(0,0,1,alpha=0.3)) +
+    geom_point(color=col_by_cost, size=4, alpha=0.5) +
+    coord_fixed() +
+    geom_line(aes(threshold,threshold), color=rgb(0,0,1,alpha=0.5)) +
+    labs(title = sprintf("ROC")) + xlab("FPR") + ylab("TPR") +
+    geom_hline(yintercept=roc[idx_threshold,"tpr"], alpha=0.5, linetype="dashed") +
+    geom_vline(xintercept=roc[idx_threshold,"fpr"], alpha=0.5, linetype="dashed")
+  
+  p_cost <- ggplot(roc, aes(threshold, cost)) +
+    geom_line(color=rgb(0,0,1,alpha=0.3)) +
+    geom_point(color=col_by_cost, size=4, alpha=0.5) +
+    labs(title = sprintf("cost function")) +
+    geom_vline(xintercept=threshold, alpha=0.5, linetype="dashed")
+  
+  sub_title <- sprintf("threshold at %.2f - cost of FP = %d, cost of FN = %d", threshold, cost_of_fp, cost_of_fn)
+  
+  grid.arrange(p_roc, p_cost, ncol=2, sub=textGrob(sub_title, gp=gpar(cex=1), just="bottom"))
+}
+
+plot_roc(roc, 0.28, 1, 2)
+```
+
+The dashed line indicates the location of the (FPR,TPR) corresponding to a threshold of 0.28 which seems to be the optimal threshold based on the associated cost. Note that here I assume a cost of 1 for FP cases and a cost of 2 for FN cases. 
+
+# Feature Selection
+
+Machine Learning uses features (variables or attributes) to generate predictive models. Too many features may lead to a series of pitfalls such as over-fitting or agonizingly expensive computation. Feature Selection Methods can be used to identify and remove redundant attributes from data that do not contribute to the accuracy of a predictive model. There are various techniques that one can use to subset feature space and enable models to perform better and more efficiently. In this section I'm going to examinine the basics of wrapper methods followed by one of its implementation using Boruta algorithm on Random Forest models. 
+
+## Wrapper Method
+
+In wrapper Method, we try to use a subset of features and train a model using them. Based on the inferences that we draw from the previous model, we decide to add or remove features from our subset. 
+
+We'll start with loading a required list of libraries.
+
+```{r wrapper_library}
+library(Metrics)
+library(randomForest)
+```
+
+We start by applying randomForest call similar to our earlier binary classification model
+
+```{r wrapper2}
+set.seed(123)
+model_rf<-randomForest(alcbin ~ age+race+inc+educat+health+maristat+insured+gender+k6,
+                       data = df_train)
+
+preds<-predict(model_rf,df_test[,-10])
+```
+
+This gives us an accuracy of `r Metrics::auc(preds,df_test$alcbin)` on the test set. The *importance()* calls show us the MeanDecreaseGini which measures the average gain of purity by splits of a given variable. We will select the top 6 features to rebuild the forest.
+
+```{r wrapper3}
+randomForest::importance(model_rf)
+model_rf2<-randomForest(alcbin ~ age+race+educat+maristat+gender+k6,
+                        data = df_train)
+
+preds2<-predict(model_rf2,df_test[,-10])
+```
+
+The rebuilt forest achives an AUC of`r auc(preds2,df_test$alcbin)`
+
+## Boruta Algorithm
+
+[Boruta](https://www.jstatsoft.org/article/view/v036i11) works as a wrapper algorithm around Random Forest. It iteratively removes the features which are proved by a statistical test to be less relevant than random probes.
+
+First we will load the package and examine how it works. 
+
+```{r Boruta1}
+library(Boruta)
+
+set.seed(123)
+boruta.train<-Boruta(alcbin~., data = df_train, doTrace = 2, maxRuns = 25)
+print(boruta.train)
+```
+
+While we wait for all the completion of all iterations (it might take a while seeing we are using a relatively large data set), below are the parameters used in Boruta: 
+
+- *maxRuns*: maximal number of random forest runs. You can consider increasing this parameter if tentative attributes are left. Default is 100.
+
+- *doTrace*: It refers to verbosity level. 0 means no tracing. 1 means reporting attribute decision as soon as it is cleared. 2 means all of 1 plus additionally reporting each iteration. Default is 0
+
+- *holdHistory*: The full history of importance runs is stored if set to TRUE (Default). Gives a plot of Classifier run vs. Importance when the plotImpHistory function is called.
+
+Once the command finishes running, we will take a look at the Boruta variable importance chart.
+
+```{r Boruta2}
+plot(boruta.train, xlab = "", xaxt = "n")
+lz<-lapply(1:ncol(boruta.train$ImpHistory),function(i)
+boruta.train$ImpHistory[is.finite(boruta.train$ImpHistory[,i]),i])
+names(lz) <- colnames(boruta.train$ImpHistory)
+Labels <- sort(sapply(lz,median))
+axis(side = 1,las=2,labels = names(Labels),
+     at = 1:ncol(boruta.train$ImpHistory), cex.axis = 0.7)
+```
+
+All variables are deemed important. However if there are tentative attributes, they will be classified as confirmed or rejected by comparing the median Z score of the attributes with the median Z score of the best shadow attribute. We can take a decision on them with the following command:
+
+```{r Boruta3}
+final.boruta <- TentativeRoughFix(boruta.train)
+print(final.boruta)
+```
+
+We then obtain the list of confirmed attributes
+
+```{r Boruta4}
+getSelectedAttributes(final.boruta, withTentative = F)
+boruta.df <- attStats(final.boruta)
+print(boruta.df)
+```
+
