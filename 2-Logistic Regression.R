@@ -1,58 +1,81 @@
+library(stringr) # Deal with string
+library(tidyverse) # General Purpose Data Cleaning
+library(forcats) # Deal with factors
 library(caTools) # Randomized sample split
 library(ROCR) # ROC curves and parameters
-library(rpart) # CART
-library(rpart.plot) # CART plots
+source("Common.R")
+
+alchol <- data.frame(read_csv("alcohol2.csv"), check.names = FALSE)
 
 # Split into training and testing sets
 set.seed(1234)
-split = sample.split(binh2, SplitRatio = 0.7)
-train = subset(binh2, split == TRUE)
-test = subset(binh2, split == FALSE)
+split = sample.split(alchol$alcbin, SplitRatio = 0.7)
+train = subset(alchol, split == TRUE)
+test = subset(alchol, split == FALSE)
 
-# Function to prepare dataset
-prepare_dataset <- function(df) {
-  
-  df<-df %>%
-    mutate(alcbin=fct_recode(alcbin,
-                             "1"="Heavy Alcohol Use",
-                             "1"="Binge But Not Heavy Use",
-                             "0"="Past Month But Not Binge",
-                             "0"="No Alcohol Use Last Month"))
-  df$alcbin<-relevel(df$alcbin, ref="0")
-  df <- df[,c("gender","age","race","inc","health","maristat","insured","educat","k6","abudep","alcbin","daysalc")]
-  df <- df[complete.cases(df),]
-  
-  return(df)
-}
+# Process data frame with utility function
 df_train<-prepare_dataset(train)
-
-# Logistic Regression
-alcbin_mod = glm(alcbin ~ age+race+educat+health+maristat+insured+race+gender+k6, data=df_train, family="binomial")
-summary(alcbin_mod)
-
-predictTrain = predict(alcbin_mod, type="response")
-ROCRpredtrain = prediction(predictTrain, df_train$alcbin) # Prediction Function
-ROCRperfTrain = performance(ROCRpredtrain, "tpr", "fpr") # Performance Function
-auc = as.numeric(performance(ROCRpredtrain, "auc")@y.values)
-auc
-
-table(df_train$alcbin,predictTrain>0.5) #Confusion matrix with threshold 0.5
-(10094+3161)/nrow(df_train) #Accuracy Rate
-
-plot(ROCRperfTrain) # Plot ROC curve
-plot(ROCRperfTrain, colorize=TRUE, print.cutoffs.at=seq(0,1,by=0.1), text.adj=c(-0.2,1.7)) # Add colors and threshold labels
-
-# Apply predictions on the test set
 df_test<-prepare_dataset(test)
 
-df_test$predicted.alcbin=predict(alcbin_mod,df_test,type="response")
-ROCRpredTest = prediction(df_test$predicted.alcbin, df_test$alcbin) #ROCR prediction function
-ROCRperfTest = performance(ROCRpredTest, "tpr", "fpr") # Performance Function
-auc = as.numeric(performance(ROCRpredTest, "auc")@y.values)
-auc
+# Logistic Regression
+glm_alcbin = glm(alcbin ~ age+race+inc+health+educat+maristat+gender+insured+k6, 
+                 data=df_train, family="binomial")
+summary(glm_alcbin)
+anova(glm_alcbin)
 
-with(df_test,table(alcbin,predicted.alcbin >=0.5))
-(4673+1461)/nrow(df_test) #accuracty rate on test set
+glm_predTrain = predict(glm_alcbin, type="response")
+table(df_train$alcbin,glm_predTrain>0.5) 
 
-plot(ROCRperfTest) # Plot ROC curve
-plot(ROCRperfTest, colorize=TRUE, print.cutoffs.at=seq(0,1,by=0.1), text.adj=c(-0.2,1.7)) # Add colors and threshold labels
+# Visualize perfomance of scoring classifiers
+glm_ROCRpredTrain = prediction(glm_predTrain, df_train$alcbin) 
+glm_ROCRperfTrain = performance(glm_ROCRpredTrain, "tpr", "fpr") 
+glm_aucTrain  = as.numeric(performance(glm_ROCRpredTrain, "auc")@y.values)
+glm_aucTrain
+
+plot(glm_ROCRperfTrain, colorize=TRUE, print.cutoffs.at=seq(0,1,by=0.1), 
+     text.adj=c(-0.2,1.7)) 
+
+# Apply predictions on the test set
+glm_predTest=predict(glm_alcbin,df_test,type="response")
+with(df_test,table(alcbin,glm_predTest >0.5))
+
+glm_ROCRpredTest = prediction(glm_predTest, df_test$alcbin) 
+glm_ROCRperfTest = performance(glm_ROCRpredTest, "tpr", "fpr") 
+glm_auc = as.numeric(performance(glm_ROCRpredTest, "auc")@y.values)
+glm_auc 
+
+plot(glm_ROCRperfTest, colorize=TRUE, print.cutoffs.at=seq(0,1,by=0.1), 
+     text.adj=c(-0.2,1.7)) 
+
+# -------------------------------------------------------------
+
+library(MASS)
+library(class) # Various functions for classification
+
+# Linear Discriminant Analysis
+lda_alcbin=lda(alcbin ~ age+race+educat+health+maristat+insured+gender+k6,data=df_train)
+lda_alcbin
+plot(lda_alcbin)
+lda_predTest=predict(lda_alcbin, df_test)
+names(lda_predTest)
+lda_class=lda_predTest$class
+table(lda_class,df_test$alcbin)
+mean(lda_class==df_test$alcbin) 
+
+lda_ROCRpredTest = prediction(lda_predTest$posterior[,2], df_test$alcbin) 
+lda_ROCRperfTest = performance(lda_ROCRpredTest, "tpr", "fpr") 
+lda_auc = as.numeric(performance(lda_ROCRpredTest, "auc")@y.values)
+lda_auc 
+
+# Quadratic Discriminant Analysis
+qda_alcbin=qda(alcbin ~ age+race+educat+health+maristat+insured+gender+k6,data=df_train)
+qda_alcbin
+qda_predTest = predict(qda_alcbin,df_test)
+qda_class=predict(qda_alcbin,df_test)$class
+table(qda_class,df_test$alcbin)
+mean(qda_class==df_test$alcbin) 
+
+qda_ROCRpredTest = prediction(qda_predTest$posterior[,2], df_test$alcbin) 
+qda_ROCRperfTest = performance(qda_ROCRpredTest, "tpr", "fpr") 
+qda_auc = as.numeric(performance(qda_ROCRpredTest, "auc")@y.values)
+qda_auc 
