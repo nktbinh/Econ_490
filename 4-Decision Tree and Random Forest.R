@@ -8,7 +8,7 @@ library(doSNOW) # Multi-cores processing
 # Decision Tree using package::party's CTREE
 dec_tree <- function(df) {
   
-  tree <- ctree(alcbin ~ age+race+educat+health+maristat+insured+race+gender+k6, data=df, 
+  tree <- ctree(alcbin ~ ., data=df, 
                 controls = ctree_control(
                   teststat="quad",
                   testtype="Univariate",
@@ -25,43 +25,55 @@ dec_tree <- function(df) {
 }
 df_test1<-dec_tree(df_test)
 
-ROCRpredCtree = prediction(df_test1$pred, df_test1$alcbin) #ROCR prediction function
-ROCRperfCtree = performance(ROCRpredCtree, "tpr", "fpr") # Performance Function
+ROCRpredCtree = prediction(df_test1$pred, df_test1$alcbin) 
+ROCRperfCtree = performance(ROCRpredCtree, "tpr", "fpr") 
 auc = as.numeric(performance(ROCRpredCtree, "auc")@y.values)
 auc
 
-plot(ROCRperfCtree) # Plot ROC curve
-plot(ROCRperfCtree, colorize=TRUE, print.cutoffs.at=seq(0,1,by=0.1), text.adj=c(-0.2,1.7)) # Add colors and threshold labels
+plot(ROCRperfCtree)
+plot(ROCRperfCtree, 
+     colorize=TRUE, 
+     print.cutoffs.at=seq(0,1,by=0.1), 
+     text.adj=c(-0.2,1.7)) 
 
 
-# Decision Tree with package::rpart with Cross Validation to establish optimal parameter
+# Cross Validation with method Rpart
 numFolds = trainControl( method = "cv", number = 100 )
 cpGrid = expand.grid( .cp = seq(0.001,0.05,0.001)) 
-# Perform the cross validation
-train(alcbin ~ age+race+educat+health+maristat+insured+race+gender+k6, data = df_train, method = "rpart", trControl = numFolds, tuneGrid = cpGrid )
+
+train(alcbin ~ age+race+educat+health+maristat+insured+race+gender+k6, 
+      data = df_train, 
+      method = "rpart", 
+      trControl = numFolds, 
+      tuneGrid = cpGrid )
 
 # Create a new CART model
-binhTreeCV = rpart(alcbin ~ age+race+educat+health+maristat+insured+race+gender+k6, data = df_train, method="class", cp = 0.001)
+binhTreeCV = rpart(alcbin ~ ., 
+                   data = df_train, 
+                   method="class", 
+                   cp = 0.001)
 prp(binhTreeCV)
 
 # Make predictions
 PredictCV = predict(binhTreeCV, newdata = df_test, type = "class")
 table(df_test$alcbin, PredictCV)
-(4541+1612)/nrow(df_test)
 
 
 # RANDOM FOREST
 # WARNING!!! - COMPUTATIONALLY INTENSIVE
-rf.train.1 <- df_train[,c("gender","age","race","inc","health","maristat","insured","educat","k6")]
+rf.train.1 <- df_train[,-10]
 rf.label <- as.factor(df_train$alcbin)
 
 set.seed(1234)
-rf.1 <- randomForest(x = rf.train.1, y = rf.label, importance = TRUE, ntree = 1000)
+rf.1 <- randomForest(x = rf.train.1, 
+                     y = rf.label, 
+                     importance = TRUE, 
+                     ntree = 1000)
 rf.1
 varImpPlot(rf.1)
 
 # ------------------------------------------------------------------------
-# CROSS - VALIDATION
+# Cross Validation with method rf
 
 # Leverage caret to create 20 folds
 set.seed(2348)
@@ -78,12 +90,9 @@ ctrl.1 <- trainControl(method = "repeatedcv", number = 10, repeats = 10,
                        index = cv.10.folds)
 
 
-# Set up doSNOW package for multi-core training. This is helpful as we're going
-# to be training a lot of trees.
-# NOTE - This works on Windows and Mac, unlike doMC (only Linus and Mac)
+# Multi-core training
 cl <- makeCluster(6, type = "SOCK")
 registerDoSNOW(cl)
-
 
 # Set seed for reproducibility and train
 set.seed(34324)
