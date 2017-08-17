@@ -80,6 +80,7 @@ df_full<-rbind(df_test,df_train)
 Time to look at the data.
 
 ```{r summary}
+head(df_full, 20)
 str(df_full)
 summary(df_full)
 ```
@@ -244,7 +245,13 @@ scoreplot(sframe, threshold)
 
 # Resampling Method
 
-Resampling Method involves repeatedly drawing samples from a training set and refitting a model of interest on each sample in order to obtain additional information about the fitted model. For example, in order to estimate the variability of a linear regression fit, we can repeatedly draw different samples from the training data, fit a linear regression to each new sample, and then examine the extent to which the resulting fits differ. Such an approach may allow us to obtain information that would not be available from fitting the model only once during the original training sample. In this section, we will discuss a very commonly used resampling cross-validation, more specifically Leave-p-Out Cross-Validation (LpO CV).
+Resampling Method involves repeatedly drawing samples from a training set and refitting a model of interest on each sample in order to obtain additional information about the fitted model. For example, in order to estimate the variability of a linear regression fit, we can repeatedly draw different samples from the training data, fit a linear regression to each new sample, and then examine the extent to which the resulting fits differ. Such an approach may allow us to obtain information that would not be available from fitting the model only once during the original training sample. In this section, I will discuss 2 very commonly used resampling cross-validation, more specifically k-fold Cross-Validation and Leave-p-Out Cross-Validation (LpO CV). I will then showcase an application of Leave-p-Out Cross-Validation on our training set using logistic regression model.
+
+
+## k-Fold Cross Validation
+
+An alternative to LOOCV is k-fold CV. This approaches involves randomly dividing the set of observations into k groups, or *folds*, of approximately equal size. The first fold is treated as a validation set, and the method is fit on the remaining k - 1 folds. The mean squared error, MSE~1~ is then computed on the observations in the held-out fold. This procedure is repeated k times; each time, a different group of observations is treated as a validation set. This process results in *k* estimates of the test error, MSE~1~, MSE~2~,...,MSE~k~. The k-fold CV estimate is computed by averageing these values.
+
 
 ## Leave-p-Out Cross Validation
 
@@ -289,6 +296,7 @@ L100pCV_auc = as.numeric(performance(ROCRpred100pCV, "auc")@y.values)
 ```
 
 Note that after Cross Validation is applied on our glm model of the training set, the accuracy remains at 0.706 but the AUC value of `r L100pCV_auc` is a bit of a dip from `r glm_aucTrain` Based on this evaluation, we can be more confident at how well this classifier will do when asked to make prediction on the testing set (which in fact it did quite well).
+
 
 ## More on ROC, AUC and Threshold Value
 
@@ -469,4 +477,291 @@ getSelectedAttributes(final.boruta, withTentative = F)
 boruta.df <- attStats(final.boruta)
 print(boruta.df)
 ```
+
+
+# Tree-Based Methods
+
+Decision trees can be used for both regression and classification. A *classification tree* is very similar to a regression tree, except that it is used to predict a qualitative response rather than a quantitative one. In classification tree, we predict that each observation belongs to the most commonly occuring class of training  observations in the region to which it belongs. In interpreting the results of a classification tree, we are often interested not only in the class prediction corresponding to a particular terminal node region, but also in the *class proportions* among the training observfations that fall into that region. 
+
+The process of building regression tree involves a top-down, greedy approach known as recursive binary partitioning. This algorithm iteratively repeat 2 steps for every generated node realizing a split:
+
+- Determine a covariate to split at
+
+- Determine a split within the set of values of that covariate
+
+Decision trees have a number of advantages over the more classical approaches discussed in previous section. They are easier to explain to people. Some believe that trees more closely mirror human decision-making than do say logistic regression. On the other hand, trees generally do not have the same level of predictive accuracy by themselves as some other approaches. Additionally, trees can be very non-robust. A small change in data can cause a large change in the final estimated tree.
+
+However these shortcomings can be limited using Cross-Validation and methods like *bagging, random forests* and *boosting*. In the following subsection, we will discuss a few of these.
+
+
+## Decision Trees using R Package **party**
+
+What sets **party** apart from the majority of traditional recursive partitioning algorithms is that these approaches favor optimizing an information measure and, according to *Mingers* (1987)
+
+> have no concept of statistical significance, and so cannot distinguish between a significant and an insignificant improvement in the information measure. 
+
+The **party** package, according to *White and Liu* (1994), demands for
+
+> a statistical approach [to recursve partitioning] which takes into account the distributional properties of the measure
+
+The following is an example of its implementation. First, to find a good tree, I performed a 100-fold cross validation grid search on five settings of *party::ctree()*:
+
+- testtype in {Bonferroni, Univariate, Teststatistic}
+
+- teststat in {quad} 
+
+- mincriterion in {90%, 95%, 99%}
+
+- minsplit in {60, 40, 20, 10}
+
+- minbucket in {30, 20, 10, 5}
+
+- maxdepth in {0, 4, 5, 6}
+
+Although MonteCarlo was among one of the possible testtype argument option, it simply added too much time to the execution time so I decided to drop it. The following series of functions set up the parameters of the CV
+
+```{r party1, eval=FALSE}
+# Utility Functions
+read_data <- function(df_train, df_test,shuffle=FALSE) {
+  
+  df_full <- rbind(df_train, df_test)
+  
+  # homogenize levels
+  df_train <- df_full[1:nrow(df_train),]
+  df_test <- df_full[(nrow(df_train)+1):nrow(df_full),]
+  
+  if(shuffle) {
+    df_train <- df_train[sample(nrow(df_train)),]
+    df_test <- df_test[sample(nrow(df_test)),]
+  }
+  
+  list(train = df_train, test = df_test)
+}
+
+kfolds <- function(N, k) {
+  return(
+    sort(
+      rep(1:k, ceiling(N / k))[1:N]
+    )
+  )
+}
+
+hypergrid <- function(k, tt, minc, mins, minb, maxd, shuffle = FALSE) {
+  G <- expand.grid(tt=tt, minc=minc, mins=mins, minb=minb, maxd=maxd, k=1:k,
+                   stringsAsFactors=FALSE)
+  G <- G[G$mins > G$minb,]
+  
+  if(shuffle) {
+    G <- G[sample(nrow(G)),]
+  }
+  
+  return(G)
+}
+
+gridsearch_ctree <- function(K, G, data, formula, cores=6, maxIter=NA) {
+  library(doSNOW, quietly=TRUE)
+  
+  cl <- makeCluster(cores)
+  registerDoSNOW(cl)
+  
+  if(is.na(maxIter)) {
+    nIter <- nrow(G)
+  } else {
+    nIter <- maxIter
+  }
+  
+  res <- foreach(i = 1:nIter, .packages="party", .combine="rbind") %dopar% {
+    if(i %% 100 == 0) cat(sprintf("%d of %d",i,nrow(G)), file="state.txt")
+    
+    cfg <- G[i,]
+    ctrl <- ctree_control(
+      testtype = cfg$tt,
+      mincriterion = cfg$minc,
+      minsplit = cfg$mins,
+      minbucket = cfg$minb,
+      maxdepth = cfg$maxd
+    )
+    
+    data_train <- data[K != cfg$k,]
+    data_test <- data[K == cfg$k,]
+    
+    res <- data.frame(
+      testtype = cfg$tt,
+      mincriterion = cfg$minc,
+      minsplit = cfg$mins,
+      minbucket = cfg$minb,
+      maxdepth = cfg$maxd,
+      correct = NA,
+      incorrect = NA,
+      elapsed = NA,
+      terminals = NA
+    )
+    
+    try({
+      time <- system.time(
+        t <- ctree(formula, data_train, controls = ctrl)
+      )
+      predictions <- Predict(t, data_test)
+      
+      response <- all.vars(formula)[1]
+      
+      nc <- sum(predictions == data_test[,response])
+      
+      res <- data.frame(
+        testtype = cfg$tt,
+        mincriterion = cfg$minc,
+        minsplit = cfg$mins,
+        minbucket = cfg$minb,
+        maxdepth = cfg$maxd,
+        correct = nc,
+        incorrect = length(predictions) - nc,
+        elapsed = time["elapsed"],
+        terminals = length(unique(where(t)))
+      )
+    })
+    
+    return(res)
+  }
+  
+  stopCluster(cl)
+  
+  return(res)
+}
+```
+
+Using these, we prepare the data for the search
+
+```{r party2, eval = FALSE}
+data <- read_data(df_train, df_test, shuffle=TRUE)
+
+k <- 100
+
+K <- kfolds(nrow(data$train), k)
+G <- hypergrid(k, 
+               tt = c("Bonferroni","Univariate","Teststatistic"), 
+               minc = c(0.9,0.95,0.99), 
+               mins = c(60,40,20,10), 
+               minb = c(30,20,10,5), 
+               maxd = c(0,4,5,6),
+               shuffle = TRUE
+)
+```
+
+Finally we can carry out the Cross-Validation
+
+```{r party3, eval=FALSE}
+result <- NA
+
+library(party)
+
+for(i in 1:44) {
+  subG <- G[((i-1)*900+1):(i*900),]
+  print(sprintf("G from %d to %d",((i-1)*900+1),i*900))
+  
+  subResult <- gridsearch_ctree(K, subG, data$train,
+                                alcbin ~ age+race+inc+health+educat+maristat+gender+insured+k6,
+                                cores = 6, maxIter = NA
+  )
+  
+  if(!is.na(result)) {
+    result <- rbind(result, subResult)
+  } else {
+    result <- subResult
+  }
+  
+  save.image("ctree.grid.search.RData")
+}
+```
+
+Note that this process can take up to hours. Once it finishes we proceed to analyze the result
+
+```{r party4, eval=FALSE}
+load("ctree.grid.search.RData")
+
+library(sqldf)
+
+r <- sqldf("select testtype, mincriterion, minsplit, minbucket, maxdepth, 
+           sum(correct) as N1, sum(incorrect) as N0, sum(elapsed) as Time, 
+           sum(terminals) as Term, count(correct) as N from result group by testtype, 
+           mincriterion, minsplit, minbucket, maxdepth")
+
+r$err <- r$N0 / (r$N0 + r$N1)
+
+r <- r[order(r$err),]
+r$idx <- 1:nrow(r)
+head(r)
+
+r$testtype <- as.character(r$testtype)
+
+v <- rep(NA,nrow(r))
+
+require(party)
+
+for(i in 1:nrow(r)) {
+  t <- ctree(alcbin ~ age+race+inc+health+educat+maristat+gender+insured+k6, data$train,
+             controls = ctree_control(
+               teststat="quad",
+               testtype=r[i,"testtype"],
+               mincriterion=r[i,"mincriterion"],
+               minsplit=r[i,"minsplit"], 
+               minbucket=r[i,"minbucket"],
+               maxdepth=r[i,"maxdepth"]
+             )
+  )
+  
+  v[i] <- sum(t@predict_response() != data$train$alcbin)/nrow(data$train)
+}
+
+r$err_all <- v
+```
+
+At this point we should obtain a table of combination of settings ranked by errors. We can go ahead and plot the winning tree.
+
+```{r party5, fig.width=14,fig.height=16}
+library(e1071) # Misc Statistical functions
+library(doSNOW) # Multi-cores processing
+require(party)
+
+cl <- makeCluster(6, type = "SOCK")
+registerDoSNOW(cl)
+tree <- ctree(alcbin ~ ., data=df_train, 
+              controls = ctree_control(
+                teststat="quad",
+                testtype="Bonferroni",
+                mincriterion=.95,
+                minsplit=10, 
+                minbucket=5,
+                maxdepth=0
+))
+stopCluster(cl)
+
+plot(tree)
+```
+
+Now we'll see if **party**'s *ctree* gives us a more accurate prediction on the test set
+
+```{r party6}
+ctree_predTest <- Predict(tree, df_test)
+table(df_test$alcbin,ctree_predTest)
+```
+
+Based on the confusion matrix, *ctree* achieves an accuracy of `r mean(ctree_predTest==df_test$alcbin)`. The auc can be calculated via
+
+```{r party7}
+require(ROCR)
+ctree_predProb <- predict(tree, newdata=df_test, type="prob")
+ctree_predProb <- unlist(lapply(ctree_predProb, function(el)el[2]))
+
+ROCRpredCtree = prediction(ctree_predProb, df_test$alcbin) 
+ROCRperfCtree = performance(ROCRpredCtree, "tpr", "fpr") 
+as.numeric(performance(ROCRpredCtree, "auc")@y.values)
+```
+
+# References
+
+- Mingers J (1987). “Expert Systems – Rule Induction with Statistical Data.” *Journal of the Operations Research Society*, **38**(1), 39–47.
+
+- White AP, Liu WZ (1994). “Bias in Information-based Measures in Decision Tree Induction.” *Machine Learning*, **15**, 321–329.
+
+- https://cran.r-project.org/web/packages/party/vignettes/party.pdf
 
